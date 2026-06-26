@@ -1,0 +1,6 @@
+{
+  "name": "Ethical Decision Companion",
+  "description": "A guided workspace to help users make ethical decisions using structured philosophical frameworks and an AI-powered moral counselor.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
