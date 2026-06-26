@@ -1,0 +1,62 @@
+name: Deploy Full-Stack App to Google Cloud Run
+
+on:
+  push:
+    branches:
+      - main # Or your default branch name
+
+env:
+  PROJECT_ID: 'YOUR_GCP_PROJECT_ID'     # Replace with your Google Cloud Project ID
+  SERVICE_NAME: 'ethos-ai-eunoia'       # Name of your Cloud Run service
+  REGION: 'us-central1'                 # Preferred Region
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Google Auth
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }} # Set up your Service Account Key in repository secrets
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Authorize Docker Push
+        run: |
+          gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+
+      - name: Build and Push Docker Image
+        run: |
+          # Define Image name inside Google Artifact Registry (adjust to your registry path if needed)
+          IMAGE_NAME="us-central1-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-run-source-deploy/${{ env.SERVICE_NAME }}:${{ github.sha }}"
+          
+          # Build container image
+          docker build -t $IMAGE_NAME .
+          
+          # Push image to registry
+          docker push $IMAGE_NAME
+          
+          echo "IMAGE_NAME=$IMAGE_NAME" >> $GITHUB_ENV
+
+      - name: Deploy to Cloud Run
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: ${{ env.SERVICE_NAME }}
+          region: ${{ env.REGION }}
+          image: ${{ env.IMAGE_NAME }}
+          env_vars: |
+            NODE_ENV=production
+            GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
+          # Set appropriate scaling rules if desired
+          flags: '--allow-unauthenticated'
