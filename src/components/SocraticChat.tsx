@@ -1,9 +1,12 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Dilemma, ChatMessage } from '../types';
 import { Send, Sparkles, MessageSquare, RefreshCw } from 'lucide-react';
+import { db } from '../lib/firebase';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 
 interface SocraticChatProps {
   dilemma: Dilemma;
+  userId?: string;
 }
 
 const SUGGESTED_QUESTIONS = [
@@ -13,18 +16,61 @@ const SUGGESTED_QUESTIONS = [
   "Whose suffering or wellbeing is being ignored in your current thoughts?"
 ];
 
-export default function SocraticChat({ dilemma }: SocraticChatProps) {
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: "initial",
-      role: "model",
-      text: "Greetings, seeker. I am here to help you inspect the foundations of your choices. Tell me, what lies at the absolute core of the tension in your heart regarding this dilemma?",
-      timestamp: new Date().toLocaleTimeString()
-    }
-  ]);
+export default function SocraticChat({ dilemma, userId }: SocraticChatProps) {
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Load chat session on mount or dilemma/user change
+  useEffect(() => {
+    const loadSession = async () => {
+      if (!userId || !dilemma.id) {
+        // Fallback to initial local state
+        setMessages([
+          {
+            id: "initial",
+            role: "model",
+            text: `Greetings, seeker. I am here to help you inspect the foundations of your choices regarding "${dilemma.title || 'this dilemma'}". Tell me, what lies at the absolute core of the tension in your heart regarding this dilemma?`,
+            timestamp: new Date().toLocaleTimeString()
+          }
+        ]);
+        return;
+      }
+
+      try {
+        const docRef = doc(db, 'users', userId, 'socraticSessions', dilemma.id);
+        const docSnap = await getDoc(docRef);
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          if (data && Array.isArray(data.messages)) {
+            setMessages(data.messages);
+            return;
+          }
+        }
+        
+        // No existing session: start a new one
+        const initialMessages: ChatMessage[] = [
+          {
+            id: "initial",
+            role: "model",
+            text: `Greetings, seeker. I am here to help you inspect the foundations of your choices regarding "${dilemma.title || 'this dilemma'}". Tell me, what lies at the absolute core of the tension in your heart regarding this dilemma?`,
+            timestamp: new Date().toLocaleTimeString()
+          }
+        ];
+        setMessages(initialMessages);
+        await setDoc(docRef, {
+          dilemmaId: dilemma.id,
+          userId,
+          messages: initialMessages
+        });
+      } catch (err) {
+        console.error("Failed to load Socratic session from Firestore:", err);
+      }
+    };
+
+    loadSession();
+  }, [dilemma.id, userId]);
 
   useEffect(() => {
     scrollRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -44,6 +90,20 @@ export default function SocraticChat({ dilemma }: SocraticChatProps) {
     setMessages(updatedMessages);
     setInput("");
     setLoading(true);
+
+    // Save user's message to Firestore immediately
+    if (userId && dilemma.id) {
+      try {
+        const docRef = doc(db, 'users', userId, 'socraticSessions', dilemma.id);
+        await setDoc(docRef, {
+          dilemmaId: dilemma.id,
+          userId,
+          messages: updatedMessages
+        }, { merge: true });
+      } catch (err) {
+        console.error("Failed to save user message to Firestore:", err);
+      }
+    }
 
     try {
       const response = await fetch("/api/socratic/chat", {
@@ -66,31 +126,75 @@ export default function SocraticChat({ dilemma }: SocraticChatProps) {
         text: data.text,
         timestamp: new Date().toLocaleTimeString()
       };
-      setMessages(prev => [...prev, modelMsg]);
-    } catch (err: any) {
-      setMessages(prev => [
-        ...prev,
-        {
-          id: `msg_err`,
-          role: 'model',
-          text: `Forgive me, my mind wandered: ${err.message}`,
-          timestamp: new Date().toLocaleTimeString()
+      
+      const finalMessages = [...updatedMessages, modelMsg];
+      setMessages(finalMessages);
+
+      // Save model's response to Firestore
+      if (userId && dilemma.id) {
+        try {
+          const docRef = doc(db, 'users', userId, 'socraticSessions', dilemma.id);
+          await setDoc(docRef, {
+            dilemmaId: dilemma.id,
+            userId,
+            messages: finalMessages
+          }, { merge: true });
+        } catch (err) {
+          console.error("Failed to save Socrates response to Firestore:", err);
         }
-      ]);
+      }
+    } catch (err: any) {
+      const errMessage = `Forgive me, my mind wandered: ${err.message}`;
+      const errMsg: ChatMessage = {
+        id: `msg_err`,
+        role: 'model',
+        text: errMessage,
+        timestamp: new Date().toLocaleTimeString()
+      };
+      
+      const finalErrMessages = [...updatedMessages, errMsg];
+      setMessages(finalErrMessages);
+
+      if (userId && dilemma.id) {
+        try {
+          const docRef = doc(db, 'users', userId, 'socraticSessions', dilemma.id);
+          await setDoc(docRef, {
+            dilemmaId: dilemma.id,
+            userId,
+            messages: finalErrMessages
+          }, { merge: true });
+        } catch (dbErr) {
+          console.error("Failed to save error response to Firestore:", dbErr);
+        }
+      }
     } finally {
       setLoading(false);
     }
   };
 
-  const resetChat = () => {
-    setMessages([
+  const resetChat = async () => {
+    const initialMessages: ChatMessage[] = [
       {
         id: "initial",
         role: "model",
-        text: "Greetings, seeker. Let us begin our Socratic inquiry anew. What aspect of this decision weighs heaviest on your conscience?",
+        text: `Greetings, seeker. Let us begin our Socratic inquiry anew. What aspect of this decision weighs heaviest on your conscience?`,
         timestamp: new Date().toLocaleTimeString()
       }
-    ]);
+    ];
+    setMessages(initialMessages);
+
+    if (userId && dilemma.id) {
+      try {
+        const docRef = doc(db, 'users', userId, 'socraticSessions', dilemma.id);
+        await setDoc(docRef, {
+          dilemmaId: dilemma.id,
+          userId,
+          messages: initialMessages
+        });
+      } catch (err) {
+        console.error("Failed to reset Socratic session in Firestore:", err);
+      }
+    }
   };
 
   return (

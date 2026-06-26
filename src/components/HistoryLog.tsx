@@ -1,54 +1,20 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { Dilemma } from '../types';
-import { Book, Calendar, Trash2, ArrowUpRight, Award, CheckCircle } from 'lucide-react';
+import { Book, Calendar, Trash2, ArrowUpRight, CheckCircle } from 'lucide-react';
 
 interface HistoryLogProps {
+  dilemmas: Dilemma[];
   onLoadSession: (dilemma: Dilemma) => void;
+  onDeleteSession: (id: string) => void;
   activeDilemmaId: string;
 }
 
-export default function HistoryLog({ onLoadSession, activeDilemmaId }: HistoryLogProps) {
-  const [history, setHistory] = useState<Dilemma[]>([]);
-
-  const loadHistory = () => {
-    try {
-      const raw = localStorage.getItem("ethical_decisions");
-      if (raw) {
-        setHistory(JSON.parse(raw));
-      } else {
-        setHistory([]);
-      }
-    } catch (e) {
-      console.error("Error reading ethical decisions history", e);
-    }
-  };
-
-  useEffect(() => {
-    loadHistory();
-
-    // Custom event listener so if we save a dilemma we can trigger a reload
-    window.addEventListener("local_decisions_updated", loadHistory);
-    return () => {
-      window.removeEventListener("local_decisions_updated", loadHistory);
-    };
-  }, []);
-
+export default function HistoryLog({ dilemmas, onLoadSession, onDeleteSession, activeDilemmaId }: HistoryLogProps) {
   const handleDelete = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     const confirmed = window.confirm("Are you sure you want to delete this moral reflection from your archive?");
-    if (!confirmed) return;
-
-    try {
-      const raw = localStorage.getItem("ethical_decisions");
-      if (raw) {
-        const parsed: Dilemma[] = JSON.parse(raw);
-        const filtered = parsed.filter(d => d.id !== id);
-        localStorage.setItem("ethical_decisions", JSON.stringify(filtered));
-        setHistory(filtered);
-        window.dispatchEvent(new Event("local_decisions_updated"));
-      }
-    } catch (err) {
-      console.error(err);
+    if (confirmed) {
+      onDeleteSession(id);
     }
   };
 
@@ -70,20 +36,22 @@ export default function HistoryLog({ onLoadSession, activeDilemmaId }: HistoryLo
         </div>
       </div>
 
-      {history.length === 0 ? (
+      {dilemmas.length === 0 ? (
         <div id="empty-history" className="text-center py-12 border border-dashed border-[#E5E2D9] rounded-[24px] space-y-2 bg-white">
           <p className="text-xs text-[#7C7971] font-medium">Your ethical ledger is currently blank.</p>
           <p className="text-[10px] text-[#A09D94] font-serif italic">Complete any dilemma analysis and seal your decision to log it here.</p>
         </div>
       ) : (
         <div id="history-grid" className="grid grid-cols-1 gap-4">
-          {history.map((item, idx) => {
+          {dilemmas.map((item, idx) => {
             const isActive = item.id === activeDilemmaId;
-            const dateStr = new Date(item.createdAt).toLocaleDateString(undefined, {
-              year: 'numeric',
-              month: 'long',
-              day: 'numeric'
-            });
+            const dateStr = item.createdAt 
+              ? new Date(item.createdAt).toLocaleDateString(undefined, {
+                  year: 'numeric',
+                  month: 'long',
+                  day: 'numeric'
+                })
+              : "Ongoing";
 
             return (
               <div
@@ -110,7 +78,7 @@ export default function HistoryLog({ onLoadSession, activeDilemmaId }: HistoryLo
                     <button
                       id={`delete-history-btn-${idx}`}
                       onClick={(e) => handleDelete(item.id, e)}
-                      className="text-[#A09D94] hover:text-rose-650 p-1 rounded transition-colors"
+                      className="text-[#A09D94] hover:text-rose-600 p-1 rounded transition-colors"
                       title="Delete Entry"
                     >
                       <Trash2 className="w-3.5 h-3.5" />

@@ -8,7 +8,33 @@ import RawlsVeil from './components/RawlsVeil';
 import SocraticChat from './components/SocraticChat';
 import AIAnalysis from './components/AIAnalysis';
 import HistoryLog from './components/HistoryLog';
-import { Scale, ShieldCheck, Compass, EyeOff, FileText, Brain, MessageSquare, BookOpen, AlertCircle } from 'lucide-react';
+import Auth from './components/Auth';
+import { auth, db } from './lib/firebase';
+import { onAuthStateChanged, signOut, User } from 'firebase/auth';
+import { 
+  collection, 
+  doc, 
+  setDoc, 
+  deleteDoc, 
+  onSnapshot, 
+  query, 
+  orderBy 
+} from 'firebase/firestore';
+import { 
+  Scale, 
+  ShieldCheck, 
+  Compass, 
+  EyeOff, 
+  FileText, 
+  Brain, 
+  MessageSquare, 
+  BookOpen, 
+  AlertCircle, 
+  LogOut, 
+  PlusCircle, 
+  User as UserIcon,
+  RefreshCw
+} from 'lucide-react';
 
 const createEmptyDilemma = (): Dilemma => ({
   id: `dil_${Date.now()}`,
@@ -33,57 +59,135 @@ type LeftTab = 'dilemma' | 'utilitarian' | 'deontology' | 'virtue' | 'veil';
 type RightTab = 'analysis' | 'chat' | 'history';
 
 export default function App() {
+  const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [dilemmas, setDilemmas] = useState<Dilemma[]>([]);
   const [activeDilemma, setActiveDilemma] = useState<Dilemma>(createEmptyDilemma());
   const [leftTab, setLeftTab] = useState<LeftTab>('dilemma');
   const [rightTab, setRightTab] = useState<RightTab>('analysis');
 
-  // Load a draft from local storage on startup if available
+  // Track Auth State changes
   useEffect(() => {
-    try {
-      const activeDraft = localStorage.getItem("ethical_dilemma_active_draft");
-      if (activeDraft) {
-        setActiveDilemma(JSON.parse(activeDraft));
+    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+      if (firebaseUser && firebaseUser.emailVerified) {
+        setUser(firebaseUser);
+      } else {
+        setUser(null);
       }
-    } catch (e) {
-      console.error("Failed to load active draft", e);
-    }
+      setAuthLoading(false);
+    });
+    return unsubscribe;
   }, []);
 
-  // Save changes to draft
+  // Sync Dilemmas with Firestore in real-time when user is authenticated
+  useEffect(() => {
+    if (!user) {
+      setDilemmas([]);
+      return;
+    }
+
+    const q = query(
+      collection(db, 'users', user.uid, 'dilemmas'),
+      orderBy('createdAt', 'desc')
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const list: Dilemma[] = [];
+      snapshot.forEach((doc) => {
+        list.push(doc.data() as Dilemma);
+      });
+      setDilemmas(list);
+
+      // Resolve active dilemma from snapshot or local storage selection
+      const activeId = localStorage.getItem("ethical_dilemma_active_id");
+      const currentActive = list.find(d => d.id === activeId) || list.find(d => d.id === activeDilemma.id);
+      
+      if (currentActive) {
+        setActiveDilemma(currentActive);
+      } else if (list.length > 0) {
+        setActiveDilemma(list[0]);
+        localStorage.setItem("ethical_dilemma_active_id", list[0].id);
+      } else {
+        // No dilemmas exist in cloud: create and save first one
+        const fresh = createEmptyDilemma();
+        const docRef = doc(db, 'users', user.uid, 'dilemmas', fresh.id);
+        setDoc(docRef, { ...fresh, userId: user.uid }).catch(e => {
+          console.error("Failed to create first dilemma in cloud", e);
+        });
+        setActiveDilemma(fresh);
+        localStorage.setItem("ethical_dilemma_active_id", fresh.id);
+      }
+    }, (err) => {
+      console.error("Real-time sync subscription error:", err);
+    });
+
+    return unsubscribe;
+  }, [user]);
+
+  // Debounced cloud autosave on dilemma changes
+  useEffect(() => {
+    if (!user || !activeDilemma || !activeDilemma.id) return;
+
+    const timer = setTimeout(async () => {
+      try {
+        const docRef = doc(db, 'users', user.uid, 'dilemmas', activeDilemma.id);
+        await setDoc(docRef, {
+          ...activeDilemma,
+          userId: user.uid
+        }, { merge: true });
+        console.log("Autosaved dilemma successfully:", activeDilemma.id);
+      } catch (err) {
+        console.error("Firestore autosave failed:", err);
+      }
+    }, 1000); // 1-second debounce window
+
+    return () => clearTimeout(timer);
+  }, [activeDilemma, user]);
+
   const handleDilemmaChange = (updated: Dilemma) => {
     setActiveDilemma(updated);
-    try {
-      localStorage.setItem("ethical_dilemma_active_draft", JSON.stringify(updated));
-    } catch (e) {
-      console.error("Failed to save active draft", e);
-    }
   };
 
-  const handleReset = () => {
-    const confirmed = window.confirm("Are you sure you want to clear the active workspace and start fresh?");
+  const handleCreateNewDilemma = async () => {
+    if (!user) return;
+    const confirmed = window.confirm("Create a new ethical dilemma workspace? Your current workspace is autosaved in the cloud.");
     if (!confirmed) return;
+
     const fresh = createEmptyDilemma();
-    setActiveDilemma(fresh);
     try {
-      localStorage.setItem("ethical_dilemma_active_draft", JSON.stringify(fresh));
-    } catch (e) {
-      console.error(e);
+      const docRef = doc(db, 'users', user.uid, 'dilemmas', fresh.id);
+      await setDoc(docRef, {
+        ...fresh,
+        userId: user.uid
+      });
+      setActiveDilemma(fresh);
+      localStorage.setItem("ethical_dilemma_active_id", fresh.id);
+      setLeftTab('dilemma');
+      setRightTab('analysis');
+    } catch (err) {
+      console.error("Failed to create new dilemma", err);
     }
-    setLeftTab('dilemma');
   };
 
-  // When loaded from HistoryLog
+  const handleDeleteDilemma = async (id: string) => {
+    if (!user) return;
+    try {
+      const docRef = doc(db, 'users', user.uid, 'dilemmas', id);
+      await deleteDoc(docRef);
+      console.log("Deleted dilemma from Firestore:", id);
+    } catch (err) {
+      console.error("Failed to delete dilemma from Firestore:", err);
+    }
+  };
+
   const handleLoadSession = (loaded: Dilemma) => {
     setActiveDilemma(loaded);
-    try {
-      localStorage.setItem("ethical_dilemma_active_draft", JSON.stringify(loaded));
-    } catch (e) {
-      console.error(e);
-    }
+    localStorage.setItem("ethical_dilemma_active_id", loaded.id);
     setLeftTab('dilemma');
   };
 
-  const handleSaveCompleted = (decision: string, reflection: string) => {
+  const handleSaveCompleted = async (decision: string, reflection: string) => {
+    if (!user) return;
     const completedDilemma: Dilemma = {
       ...activeDilemma,
       status: 'completed',
@@ -95,26 +199,44 @@ export default function App() {
     setActiveDilemma(completedDilemma);
 
     try {
-      // Save draft as the active
-      localStorage.setItem("ethical_dilemma_active_draft", JSON.stringify(completedDilemma));
-
-      // Append to the list of completed decisions
-      const raw = localStorage.getItem("ethical_decisions");
-      const parsed: Dilemma[] = raw ? JSON.parse(raw) : [];
-      const index = parsed.findIndex(d => d.id === completedDilemma.id);
-      if (index >= 0) {
-        parsed[index] = completedDilemma;
-      } else {
-        parsed.push(completedDilemma);
-      }
-      localStorage.setItem("ethical_decisions", JSON.stringify(parsed));
-      
-      // Notify components (e.g., HistoryLog) to refresh
-      window.dispatchEvent(new Event("local_decisions_updated"));
+      const docRef = doc(db, 'users', user.uid, 'dilemmas', completedDilemma.id);
+      await setDoc(docRef, {
+        ...completedDilemma,
+        userId: user.uid
+      }, { merge: true });
+      console.log("Dilemma completed and sealed:", completedDilemma.id);
     } catch (err) {
-      console.error("Error saving completed decision", err);
+      console.error("Error saving completed decision to Firestore", err);
     }
   };
+
+  const handleSignOut = async () => {
+    const confirmed = window.confirm("Are you sure you want to sign out?");
+    if (!confirmed) return;
+    try {
+      await signOut(auth);
+      setUser(null);
+    } catch (err) {
+      console.error("Sign out failed:", err);
+    }
+  };
+
+  // Auth gate loading fallback
+  if (authLoading) {
+    return (
+      <div id="auth-loading-screen" className="min-h-screen bg-[#F7F5F0] flex flex-col items-center justify-center gap-4">
+        <div className="w-10 h-10 border-4 border-[#5A5A40] border-t-transparent rounded-full animate-spin" />
+        <p className="text-xs font-bold text-[#5A5A40] uppercase tracking-widest font-serif italic animate-pulse">
+          Opening Ethical Workspace...
+        </p>
+      </div>
+    );
+  }
+
+  // Auth Gate
+  if (!user) {
+    return <Auth onAuthComplete={(verifiedUser) => setUser(verifiedUser)} />;
+  }
 
   return (
     <div id="app-root-layout" className="min-h-screen bg-[#F7F5F0] flex flex-col antialiased text-[#3D3B36]">
@@ -135,19 +257,32 @@ export default function App() {
             </div>
           </div>
 
-          <div className="flex items-center gap-4">
-            <div className="text-right hidden sm:block">
-              <p className="text-[10px] uppercase font-bold text-[#A09D94] tracking-wider">Active Session</p>
-              <p className="text-xs font-semibold text-[#5D5B54] font-serif">
-                {activeDilemma.title ? `"${activeDilemma.title}"` : "Drafting New Dilemma"}
-              </p>
+          <div className="flex items-center flex-wrap gap-4">
+            {/* User Profile Info */}
+            <div className="flex items-center gap-2 bg-[#FCFBF9] border border-[#F2F1EC] pl-3 pr-4 py-1.5 rounded-full text-xs font-medium text-[#5D5B54]">
+              <UserIcon className="w-3.5 h-3.5 text-[#5A5A40]" />
+              <span className="max-w-[140px] truncate" title={user.email || ""}>
+                {user.email}
+              </span>
             </div>
+
             <button
-              id="global-reset-btn"
-              onClick={handleReset}
-              className="px-5 py-2 text-xs font-semibold rounded-full border border-[#D1CEC4] hover:bg-[#F0EEE6] text-[#5A5A40] transition-colors cursor-pointer"
+              id="global-new-dilemma-btn"
+              onClick={handleCreateNewDilemma}
+              className="px-4 py-2 text-xs font-semibold rounded-full bg-[#5A5A40] hover:bg-[#484833] text-white transition-colors cursor-pointer flex items-center gap-1.5"
             >
-              Start Fresh
+              <PlusCircle className="w-3.5 h-3.5" />
+              <span>New Dilemma</span>
+            </button>
+
+            <button
+              id="global-signout-btn"
+              onClick={handleSignOut}
+              className="px-4 py-2 text-xs font-semibold rounded-full border border-[#D1CEC4] hover:bg-[#F2F1EC] text-[#7C7971] hover:text-[#5A5A40] transition-colors cursor-pointer flex items-center gap-1.5"
+              title="Sign Out"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              <span>Sign Out</span>
             </button>
           </div>
         </div>
@@ -231,7 +366,6 @@ export default function App() {
                 onReset={() => {
                   const fresh = createEmptyDilemma();
                   setActiveDilemma(fresh);
-                  localStorage.setItem("ethical_dilemma_active_draft", JSON.stringify(fresh));
                 }}
               />
             )}
@@ -340,7 +474,7 @@ export default function App() {
                     </p>
                   </div>
                 ) : (
-                  <SocraticChat dilemma={activeDilemma} />
+                  <SocraticChat dilemma={activeDilemma} userId={user.uid} />
                 )}
               </div>
             )}
@@ -348,7 +482,9 @@ export default function App() {
             {rightTab === 'history' && (
               <div id="history-view-inner" className="bg-white border border-[#F0EEE6] rounded-[24px] p-6 shadow-xs flex-1">
                 <HistoryLog
+                  dilemmas={dilemmas}
                   onLoadSession={handleLoadSession}
+                  onDeleteSession={handleDeleteDilemma}
                   activeDilemmaId={activeDilemma.id}
                 />
               </div>

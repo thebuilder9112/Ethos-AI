@@ -1,0 +1,62 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "Represents a registered user.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["uid", "email"]
+    },
+    "Dilemma": {
+      "title": "Ethical Dilemma Workspace",
+      "description": "Represents an active or completed ethical dilemma with its framework worksheets.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "options": { "type": "array" },
+        "stakeholders": { "type": "array" },
+        "utilitarianData": { "type": "object" },
+        "kantianData": { "type": "array" },
+        "virtueData": { "type": "array" },
+        "veilOfIgnoranceReflection": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "status": { "type": "string", "enum": ["draft", "analyzing", "completed"] },
+        "finalDecision": { "type": "string" },
+        "finalReflection": { "type": "string" }
+      },
+      "required": ["id", "userId", "title", "description", "createdAt", "status"]
+    },
+    "SocraticSession": {
+      "title": "Socratic Chat Session",
+      "description": "Represents a chat history with Socrates for a specific dilemma.",
+      "type": "object",
+      "properties": {
+        "dilemmaId": { "type": "string" },
+        "userId": { "type": "string" },
+        "messages": { "type": "array" }
+      },
+      "required": ["dilemmaId", "userId", "messages"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Root user profile document"
+    },
+    "/users/{userId}/dilemmas/{dilemmaId}": {
+      "schema": "Dilemma",
+      "description": "The collection of dilemmas created by the user"
+    },
+    "/users/{userId}/socraticSessions/{dilemmaId}": {
+      "schema": "SocraticSession",
+      "description": "Socratic Chat history for the specific dilemma"
+    }
+  }
+}
